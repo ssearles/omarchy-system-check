@@ -10,6 +10,8 @@
 #   Run in terminal    open a floating terminal that shows the commands and asks
 #                      for confirmation before running anything
 #   Defer to next boot hide the bar icon until the machine restarts
+#   Close              dismiss the window without deferring: the icon keeps
+#                      showing the finding
 #
 # Uses a GTK4 dialog via PyGObject, which is stock on Omarchy (python-gobject is
 # in omarchy-base.packages). zenity is deliberately NOT used: it does not ship
@@ -284,6 +286,13 @@ class Window(Gtk.ApplicationWindow):
         defer.connect("clicked", self.on_defer)
         actions.append(defer)
 
+        # Closing the window never writes the defer flag. The button makes that
+        # explicit, so "I do not want this now" does not look like "hide it
+        # until reboot" when the only visible way out is the titlebar X.
+        close = Gtk.Button(label="Close")
+        close.connect("clicked", self.on_close)
+        actions.append(close)
+
         run = Gtk.Button(label="Run in terminal")
         run.add_css_class("suggested-action")
         run.set_sensitive(bool(cmds and run_script))
@@ -301,6 +310,9 @@ class Window(Gtk.ApplicationWindow):
         toast("Deferred", "Cleanup will be offered again after the next boot")
         self.close()
 
+    def on_close(self, _button):
+        self.close()
+
     def on_run(self, _button):
         command = f"bash {run_script}"
         try:
@@ -312,8 +324,26 @@ class Window(Gtk.ApplicationWindow):
         self.close()
 
 
+window = None
+
+
 def on_activate(app):
-    Window(app).present()
+    global window
+    if window is not None:
+        # A second click arrives as another activation of the same
+        # application, not a new process. Reuse the window that is already
+        # open instead of stacking another copy of the same commands.
+        window.present()
+        return
+    window = Window(app)
+    window.connect("close-request", on_window_closed)
+    window.present()
+
+
+def on_window_closed(_window):
+    global window
+    window = None
+    return False  # let the close continue
 
 
 app = Gtk.Application(application_id="org.omarchy.SystemCheckPopup")

@@ -6,8 +6,8 @@ One bar icon for the two things that quietly rot an Arch/Omarchy machine:
 failed units, failed initramfs generation).
 
 Click the icon and you get the exact commands for *this* machine in a window you
-can select with the mouse, with **Copy**, **Run in terminal**, and **Defer**
-buttons.
+can select with the mouse, with **Copy**, **Run in terminal**, **Defer to next
+boot**, and **Close** buttons.
 
 Nothing is ever run for you. Every check is read-only, no `sudo`, and the plugin
 does not install services or timers.
@@ -117,14 +117,19 @@ Removal is one command (see [Removal](#removal)).
 
 Click the icon. The popup lists the commands to paste into a terminal:
 
+Clicking the icon again does not stack more windows: the popup is a single
+application, so the click brings the open window forward instead.
+
 - **Copy commands** — puts the block on the clipboard.
 - **Run in terminal** — opens a floating terminal that shows the commands and
   asks before running anything. Repairs and the update are asked for
   **separately** (`Run these repairs now?` then `Run omarchy update now?`), so
   agreeing to a repair never drags the update — and its reboot prompt — along.
-- **Defer to next boot** — hides the icon until the machine restarts. Closing
-  the window has the same effect. The flag lives in `$XDG_RUNTIME_DIR`, so it
-  disappears on reboot with no cleanup.
+- **Defer to next boot** — hides the icon until the machine restarts. The flag
+  lives in `$XDG_RUNTIME_DIR`, so it disappears on reboot with no cleanup.
+- **Close** — dismisses the window without deferring, so the icon keeps showing
+  the finding. Closing the window with the titlebar × does the same; only
+  **Defer to next boot** sets the flag.
 
 ### What the popup shows
 
