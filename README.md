@@ -125,9 +125,8 @@ application, so the click brings the open window forward instead.
   asks before running anything. Repairs and the update are asked for
   **separately** (`Run these repairs now?` then `Run omarchy update now?`), so
   agreeing to a repair never drags the update — and its reboot prompt — along.
-  Both prompts read `[y/N] (Enter = no)`, and the terminal prints that reminder
-  above them: pressing Enter, or answering anything other than `y`/`yes`, skips
-  that job.
+  Both prompts read `[y/N] (Enter = no)`: pressing Enter, or answering anything
+  other than `y`/`yes`, skips that job.
 - **Defer to next boot** — hides the icon until the machine restarts. The flag
   lives in `$XDG_RUNTIME_DIR`, so it disappears on reboot with no cleanup.
 - **Close** — dismisses the window without deferring, so the icon keeps showing
@@ -229,7 +228,7 @@ the command without ever running.
 ## Tests
 
 ```bash
-tests/run-tests.sh      # 163 assertions, no sudo, no real pacman
+tests/run-tests.sh      # 161 assertions, no sudo, no real pacman
 node tests/contrast.test.js   # the 52 colour assertions on their own
 ```
 

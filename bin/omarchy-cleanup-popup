@@ -175,8 +175,6 @@ if [[ -n $cmds ]]; then
   {
     echo '#!/usr/bin/env bash'
     echo 'set -euo pipefail'
-    echo 'echo "At each prompt, Enter means no; type y (or yes) to run that job."'
-    echo 'echo'
     if [[ -n $health_cmds ]]; then
       echo "cat <<'OMAC_HEALTH'"
       printf '%s\n' "$health_cmds"
