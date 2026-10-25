@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Read-only health check for an Arch/Omarchy system after aborted, hung or
+# partial updates. Never modifies anything. `--fix` prints the repair commands
+# instead of running them.
+#
+# Exit codes: 0 = clean, 1 = issues found, 2 = bad usage, 3 = skipped (busy).
+set -uo pipefail
+
+# The script's own directory first, so a bundled helper (or a test stub) wins.
+here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)
+PATH="$here:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
+export PATH
+
+# Paths are overridable so the checks can run against fixtures in tests.
+pacman_db=${OMARCHY_PACMAN_DB:-/var/lib/pacman}
+pacman_log=${OMARCHY_PACMAN_LOG:-/var/log/pacman.log}
+etc_dir=${OMARCHY_ETC_DIR:-/etc}
+update_log=${OMARCHY_UPDATE_LOG:-/tmp/omarchy-update.log}
+
+print_only=0
+case "${1:-}" in
+  --fix|--report) print_only=1 ;;
+  "") ;;
+  *) echo "usage: $0 [--fix|--report]" >&2; exit 2 ;;
+esac
+
+issues=()
+fixes=()
+
+# Never run checks while pacman is mid-transaction: everything below would
+# report false positives (the local DB is rewritten during a transaction).
+# Exit 3 (not 0) so callers can tell "could not check" from "all clean".
+if pgrep -x pacman >/dev/null 2>&1 || pgrep -f '(^|/)omarchy-update($| )' >/dev/null 2>&1; then
+  echo "SKIP: pacman/omarchy-update is running; health check skipped." >&2
+  exit 3
+fi
+
+# 1. Stale lock left behind by a killed transaction
+if [[ -f $pacman_db/db.lck ]]; then
+  issues+=("stale pacman lock: $pacman_db/db.lck (no pacman running)")
+  fixes+=("sudo rm -f $pacman_db/db.lck")
+fi
+
+# 2. Local DB entries with no desc file: symptom of an interrupted write.
+#    These produce "could not open file /var/lib/pacman/local/<pkg>/desc".
+missing=()
+# The glob stays literal when there are no entries; skip anything that is not
+# an actual directory, or the empty case reports a bogus "missing desc: *".
+for d in "$pacman_db"/local/*/; do
+  [[ -d $d ]] || continue
+  [[ -f "$d/desc" ]] || missing+=("$(basename "$d")")
+done
+if (( ${#missing[@]} )); then
+  issues+=("${#missing[@]} local DB entr(y/ies) missing desc: ${missing[*]:0:6}")
+  fixes+=("sudo pacman -S --noconfirm ${missing[*]}   # review: reinstalls these packages")
+fi
+
+# 3. Unbalanced transaction markers in the pacman log
+started=$(tail -4000 "$pacman_log" 2>/dev/null | grep -c "transaction started" || true)
+completed=$(tail -4000 "$pacman_log" 2>/dev/null | grep -c "transaction completed" || true)
+if (( started != completed )); then
+  issues+=("pacman.log imbalance: $started started vs $completed completed (aborted transaction)")
+  fixes+=("grep -n 'transaction' $pacman_log | tail -20   # investigate: identify the package that did not finish")
+fi
+
+# 4. Unmerged config files from the last update
+pacnew=$(find "$etc_dir" -name '*.pacnew' 2>/dev/null | wc -l)
+if (( pacnew )); then
+  issues+=("$pacnew unmerged .pacnew config file(s)")
+  fixes+=("sudo pacdiff   # review: merges each file interactively, one prompt per file")
+fi
+
+# 5. Orphans
+orphans=$(pacman -Qtdq 2>/dev/null || true)
+if [[ -n $orphans ]]; then
+  n=$(printf '%s\n' "$orphans" | wc -l)
+  issues+=("$n orphaned package(s)")
+  fixes+=("sudo pacman -Rns $(printf '%s\n' "$orphans" | tr '\n' ' ')  # review: pacman -Qi <pkg> first - skip anything you installed on purpose")
+fi
+
+# 6. Dependency sanity
+if ! pacman -Dk >/dev/null 2>&1; then
+  issues+=("pacman -Dk reports dependency problems")
+  fixes+=("pacman -Dk   # show details")
+fi
+
+# 7. Failed units
+failed=$(systemctl --failed --no-legend 2>/dev/null | wc -l)
+if (( failed )); then
+  issues+=("$failed failed systemd unit(s)")
+  fixes+=("systemctl --failed")
+fi
+
+# 8. Last update log: initramfs / hook failures Omarchy flags itself
+if [[ -r $update_log ]]; then
+  if grep -q "Updating linux initcpios" "$update_log" &&
+     ! grep -q "Initcpio image generation successful" "$update_log"; then
+    issues+=("last update: initramfs generation may have failed (review before reboot)")
+    fixes+=("grep -n -A5 'Updating linux initcpios' $update_log")
+  fi
+fi
+
+if (( ${#issues[@]} == 0 )); then
+  echo "System looks clean."
+  exit 0
+fi
+
+printf 'ISSUE: %s\n' "${issues[@]}"
+
+if (( print_only )); then
+  printf '\nSuggested repairs (review before running):\n'
+  printf '  %s\n' "${fixes[@]}"
+  exit 1
+fi
+
+# Notify only when the issue set changes, so a known problem doesn't nag daily
+state_dir="${XDG_RUNTIME_DIR:-/tmp}/omarchy-health-check"
+mkdir -p "$state_dir"
+stamp=$(printf '%s\n' "${issues[@]}" | sha256sum | cut -d' ' -f1)
+if [[ -f $state_dir/last && $(<"$state_dir/last") == "$stamp" ]]; then
+  exit 1
+fi
+printf '%s' "$stamp" >"$state_dir/last"
+
+notify-send --app-name="System Health" --icon=dialog-warning \
+  --urgency=normal --category=system \
+  "System health: ${#issues[@]} issue(s)" \
+  "$(printf '%s\n' "${issues[@]}")"$'\n\n'"Run: omarchy-health-check --fix"
+
+exit 1

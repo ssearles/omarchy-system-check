@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Notify about pending Arch/Omarchy updates. Read-only: uses checkupdates'
+# temporary DB, never touches /var/lib/pacman, never needs root.
+set -euo pipefail
+
+# Keep the script's own directory first: a bundled checkupdates/helper wins, and
+# the plugin still works when nothing is installed on PATH.
+here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)
+PATH="$here:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
+export PATH
+
+report=0
+case "${1:-}" in
+  --report) report=1 ;;
+  "") ;;
+  *) echo "usage: $0 [--report]" >&2; exit 2 ;;
+esac
+
+# Boot-time runs can beat Wi-Fi; give DNS a short chance before concluding "no
+# updates". Kept at ~30 s because the boot timer fires 30 s after login — a
+# longer wait would push the toast past the point where it is still welcome.
+if ! getent hosts geo.mirror.pkgbuild.com >/dev/null 2>&1; then
+  for _ in 1 2 3 4 5 6; do
+    sleep 5
+    getent hosts geo.mirror.pkgbuild.com >/dev/null 2>&1 && break
+  done
+fi
+
+count=0
+list=""
+if command -v checkupdates >/dev/null 2>&1; then
+  # checkupdates: 0 = updates pending, 2 = none, anything else = could not check
+  # (offline, mirror error). Treating an error as "no updates" is a false clean.
+  rc=0
+  list=$(checkupdates --nocolor 2>/dev/null) || rc=$?
+  if (( rc != 0 && rc != 2 )); then
+    echo "SKIP: checkupdates failed (network or mirror error); update status unknown." >&2
+    exit 3
+  fi
+  count=$(printf '%s' "$list" | grep -c . || true)
+fi
+
+# Omarchy itself (package + dev checkout drift)
+omarchy_note=""
+if command -v omarchy-update-available >/dev/null 2>&1; then
+  if omarchy_note=$(omarchy-update-available 2>/dev/null); then
+    : # exit 0 = update available, message in $omarchy_note
+  else
+    omarchy_note=""
+  fi
+fi
+
+# Refresh the bar indicator so the icon matches the notification
+command -v omarchy-update-status >/dev/null 2>&1 && omarchy-update-status >/dev/null 2>&1 || true
+
+if (( report )); then
+  if (( count == 0 )) && [[ -z $omarchy_note ]]; then
+    echo "No pending updates."
+    exit 0
+  fi
+  (( count > 0 )) && { echo "$count package(s) pending:"; printf '%s\n' "$list"; }
+  [[ -n $omarchy_note ]] && echo "$omarchy_note"
+  exit 0
+fi
+
+if (( count == 0 )) && [[ -z $omarchy_note ]]; then
+  exit 0
+fi
+
+body=""
+if (( count > 0 )); then
+  body+="${count} package(s) pending"$'\n'
+  body+=$(printf '%s\n' "$list" | head -8 | awk '{print "  " $1 " " $3 " → " $4}')
+  (( count > 8 )) && body+=$'\n'"  … and $((count - 8)) more"
+fi
+[[ -n $omarchy_note ]] && body+=$'\n'"$omarchy_note"
+
+# Do not spam: only re-notify when the pending set changes
+state_dir="${XDG_RUNTIME_DIR:-/tmp}/omarchy-update-check"
+mkdir -p "$state_dir"
+stamp=$(printf '%s' "$body" | sha256sum | cut -d' ' -f1)
+if [[ -f $state_dir/last && $(<"$state_dir/last") == "$stamp" ]]; then
+  exit 0
+fi
+printf '%s' "$stamp" >"$state_dir/last"
+
+notify-send --app-name="System Updates" --icon=software-update-available \
+  --urgency=normal --category=system \
+  "Updates available" "$body"

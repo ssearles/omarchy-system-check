@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# One combined check: pending updates + update-health leftovers.
+#
+#   omarchy-system-check            toast only if something needs attention
+#   omarchy-system-check --report   print a human report
+#   omarchy-system-check --json     one JSON object for the bar widget
+#
+# The bar widget (ssearles.system-check) polls --json; the toast is opt-in via
+# omarchy-system-check.timer. Both share the same findings.
+set -uo pipefail
+
+# Self-contained: the check scripts live next to this one (plugin bin/ dir or
+# ~/.local/bin), so resolve them by path rather than trusting the caller's PATH.
+here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)
+PATH="$here:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
+export PATH
+
+mode=toast
+case "${1:-}" in
+  --report) mode=report ;;
+  --json) mode=json ;;
+  "") ;;
+  *) echo "usage: $0 [--report|--json]" >&2; exit 2 ;;
+esac
+
+state_dir="${XDG_RUNTIME_DIR:-/tmp}/omarchy-system-check"
+mkdir -p "$state_dir"
+
+# Deferred from the popup: stays quiet until the next boot, since $XDG_RUNTIME_DIR
+# is tmpfs and the flag disappears with the reboot.
+deferred=0
+[[ -f $state_dir/deferred ]] && deferred=1
+
+if (( deferred )); then
+  case $mode in
+    report) echo "Deferred until next boot." ;;
+    json) printf '{"known":true,"deferred":true,"updates":0,"health":0,"summary":"","detail":""}\n' ;;
+  esac
+  exit 0
+fi
+
+# Delay between retries; tests set this to 0 so the retry paths are instant.
+retry_delay=${OMARCHY_CHECK_RETRY_DELAY:-10}
+
+# The update check can fail transiently too (a mirror hiccup, a held db lock).
+# Without a retry a one-second blip leaves the bar amber for a whole hour, so
+# try again before calling the result unknown.
+updates_skipped=0
+for _ in 1 2 3; do
+  updates=$(omarchy-update-check --report 2>&1) && { updates_skipped=0; break; }
+  rc=$?
+  updates_skipped=1
+  # Exit 3 is "could not check"; anything else is a real failure, don't retry.
+  (( rc != 3 )) && break
+  sleep "$retry_delay"
+done
+
+# A health check that skips because pacman is busy is not a clean result. Retry
+# briefly, then report "unknown" rather than showing a check mark.
+
+health_skipped=0
+health_rc=0
+for _ in 1 2 3; do
+  # A later attempt succeeding clears the skip: otherwise one transient busy
+  # period leaves the widget reporting "skipped" until the next poll.
+  health=$(omarchy-health-check --report 2>&1) && { health_rc=0; health_skipped=0; break; }
+  health_rc=$?
+  if (( health_rc != 3 )); then break; fi
+  health_skipped=1
+  sleep "$retry_delay"
+done
+
+# Only 0 (clean) and 1 (issues found) are real results. Any other exit, or an
+# exit 1 that printed no ISSUE lines, means the check did not actually run - so
+# it must not be reported as clean.
+if (( health_rc != 0 && health_rc != 1 && health_rc != 3 )); then
+  health_skipped=1
+fi
+
+health_reason=""
+if (( health_skipped )); then
+  if (( health_rc == 3 )); then
+    health_reason="pacman was busy"
+  else
+    health_reason="exit $health_rc"
+  fi
+fi
+
+# "No pending updates." / "System looks clean." mean that half is quiet
+updates_pending=0
+# `A || B && C` parses as `(A || B) && C`, which counted a *skipped* check as
+# "pending". Spell it out.
+if (( !updates_skipped )) && [[ $updates != "No pending updates." ]]; then
+  updates_pending=1
+fi
+updates_count=$(printf '%s\n' "$updates" | sed -n 's/^\([0-9][0-9]*\) package(s) pending:.*/\1/p' | head -1)
+updates_count=${updates_count:-0}
+health_count=$(printf '%s\n' "$health" | grep -c '^ISSUE:' || true)
+if (( health_rc == 1 && health_count == 0 )); then
+  health_skipped=1
+  health_reason="reported an error"
+fi
+
+if (( !updates_pending && health_count == 0 && !health_skipped && !updates_skipped )); then
+  case $mode in
+    report) echo "All clear: no pending updates, no health issues." ;;
+    json) printf '{"known":true,"deferred":false,"updates":0,"health":0,"summary":"","detail":""}\n' ;;
+  esac
+  exit 0
+fi
+
+body=""
+if (( health_count )); then
+  body+="Health"$'\n'"$(printf '%s\n' "$health" | grep '^ISSUE:' | sed 's/^ISSUE: /  /')"$'\n'
+elif (( health_skipped )); then
+  body+="Health"$'\n'"  check skipped: $health_reason"$'\n'
+fi
+if (( updates_pending )); then
+  body+="Updates"$'\n'"$(printf '%s\n' "$updates" | head -6 | sed 's/^/  /')"$'\n'
+  body+="  Run last: omarchy update (it reboots)"$'\n'
+elif (( updates_skipped )); then
+  body+="Updates"$'\n'"  check skipped: could not reach the mirrors"$'\n'
+fi
+body+=$'\n'"Details: omarchy-report"
+
+# One-line pieces shared by the toast title, the tooltip, and --json
+health_detail=$(printf '%s\n' "$health" | grep '^ISSUE:' | sed 's/^ISSUE: //' | paste -sd'; ' -)
+updates_detail=""
+(( updates_pending )) && updates_detail=$(printf '%s\n' "$updates" | head -1 | sed 's/:$//')
+
+if (( updates_pending )); then
+  if (( updates_count > 0 )); then
+    updates_label="$updates_count updates"
+  else
+    updates_label="updates pending"
+  fi
+else
+  updates_label=""
+fi
+
+if (( health_count == 1 )) && [[ -n $health_detail ]]; then
+  # One finding reads better verbatim: "7 orphaned package(s)".
+  health_label="$health_detail"
+elif (( health_count > 0 )); then
+  health_label="$health_count health issues"
+else
+  health_label=""
+fi
+
+summary=$(printf '%s\n%s\n' "$updates_label" "$health_label" | grep -v '^$' | paste -sd, - | sed 's/,/, /g')
+detail=$(printf '%s\n%s\n' "$updates_detail" "$health_detail" | grep -v '^$' | paste -sd';' - | sed 's/;/; /g')
+
+if [[ $mode == json ]]; then
+  known=1
+  (( health_skipped || updates_skipped )) && known=0
+  if [[ $detail == "" ]]; then
+    (( health_skipped )) && detail="health check skipped: $health_reason"
+    (( updates_skipped )) && detail="update check skipped: could not reach the mirrors"
+  fi
+  jq -cn --argjson known "$known" --argjson u "$updates_count" --argjson h "$health_count" \
+    --arg summary "$summary" --arg detail "$detail" \
+    '{known:($known == 1), deferred:false, updates:$u, health:$h, summary:$summary, detail:$detail}'
+  exit 0
+fi
+
+if [[ $mode == report ]]; then
+  printf '%s\n' "$body"
+  exit 0
+fi
+
+# Nothing to report beyond the skips themselves: stay quiet instead of nagging.
+if (( !updates_pending && health_count == 0 )); then
+  exit 0
+fi
+
+# Notify once per distinct result set (state is per-boot, so every boot re-notifies)
+stamp=$(printf '%s' "$body" | sha256sum | cut -d' ' -f1)
+if [[ -f $state_dir/last && $(<"$state_dir/last") == "$stamp" ]]; then
+  exit 0
+fi
+
+body="$body"$'\n\n'"Click for cleanup commands"
+
+# Click target: always the copy next to this script.
+popup="$here/omarchy-cleanup-popup"
+
+send_toast() {
+  # omarchy-notification-send attaches a click command; notify-send cannot.
+  if command -v omarchy-notification-send >/dev/null 2>&1; then
+    # Reuse the previous id so a repeat check REPLACES the toast instead of
+    # stacking (critical toasts never expire on their own).
+    local args=(--app-name "System Check" -u critical -t 0 -i software-update-available)
+    local idfile="$state_dir/notif_id" id
+    [[ -f $idfile ]] && args+=(-r "$(cat "$idfile")")
+    if id=$(omarchy-notification-send "${args[@]}" -p \
+          "System check: ${summary:-needs attention}" "$body" \
+          --exec "$popup" 2>/dev/null) && [[ -n $id ]]; then
+      printf '%s' "$id" >"$idfile"
+      return 0
+    fi
+    return 1
+  fi
+  notify-send --app-name="System Check" --icon=software-update-available \
+    --urgency=normal "System check: ${summary:-needs attention}" "$body" 2>/dev/null
+}
+
+# The timer fires 30 s after the user manager starts, which can be before
+# omarchy-shell owns org.freedesktop.Notifications — a toast sent into that gap
+# is lost. Retry for ~30 s, and record the dedupe stamp only after a toast
+# actually went out, so a failed send doesn't silence the retry too.
+for _ in {1..10}; do
+  if send_toast; then
+    printf '%s' "$stamp" >"$state_dir/last"
+    exit 0
+  fi
+  sleep 3
+done
+
+echo "omarchy-system-check: notification service unavailable, no toast sent" >&2
+exit 1

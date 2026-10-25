@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "ssearles.system-check",
+  "name": "System Check",
+  "version": "1.0.0",
+  "author": "Steven Searles",
+  "description": "Pending package updates and post-update health problems in the bar, with a click-through cleanup popup.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "SystemCheck.qml"
+  },
+  "barWidget": {
+    "displayName": "System Check",
+    "description": "A heartbeat in the bar: green when clean, amber when deferred or the check could not run, red when updates or repair work are pending. Click for the cleanup commands.",
+    "category": "System",
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}

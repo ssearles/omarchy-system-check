@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# One copyable system report: pending updates + health findings.
+#
+#   omarchy-report          print + clipboard + window
+#   omarchy-report --print  print + clipboard only (no window)
+#
+# The window is GTK4 via PyGObject (stock on Omarchy). zenity is not used: it
+# does not ship with Omarchy.
+set -uo pipefail
+
+here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)
+PATH="$here:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
+export PATH
+
+gui=1
+case "${1:-}" in
+  --print) gui=0 ;;
+  "") ;;
+  *) echo "usage: $0 [--print]" >&2; exit 2 ;;
+esac
+
+updates_rc=0
+updates=$(omarchy-update-check --report 2>&1) || updates_rc=$?
+health_rc=0
+health=$(omarchy-health-check --report 2>&1) || health_rc=$?
+
+note=""
+(( updates_rc == 3 )) && note+="updates could not be checked (network or mirror error)"$'\n'
+(( health_rc == 3 )) && note+="health check skipped (pacman was busy)"$'\n'
+
+report=$(printf '=== UPDATES ===\n%s\n\n=== HEALTH ===\n%s\n' "$updates" "$health")
+if [[ -n $note ]]; then
+  report+=$'\n=== NOTE ===\n'"$note"
+fi
+
+printf '%s\n' "$report"
+
+copied=0
+if command -v wl-copy >/dev/null 2>&1 && [[ -n ${WAYLAND_DISPLAY:-} ]]; then
+  if printf '%s\n' "$report" | wl-copy 2>/dev/null; then
+    copied=1
+  fi
+fi
+
+if (( copied )); then
+  echo
+  echo "(copied to clipboard)"
+fi
+
+if (( gui )) && [[ -n ${WAYLAND_DISPLAY:-}${DISPLAY:-} ]]; then
+  if python3 -c 'import gi; gi.require_version("Gtk", "4.0")' >/dev/null 2>&1; then
+    OMAC_REPORT="$report" python3 - <<'PY'
+import os
+import sys
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gtk
+
+text = os.environ.get("OMAC_REPORT", "")
+
+
+class Window(Gtk.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="System report")
+        self.set_default_size(900, 560)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{side}")(16)
+        self.set_child(box)
+
+        scroll = Gtk.ScrolledWindow(vexpand=True)
+        scroll.add_css_class("card")
+        view = Gtk.TextView()
+        view.set_editable(False)
+        view.set_monospace(True)
+        view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        view.set_left_margin(12)
+        view.set_right_margin(12)
+        view.set_top_margin(10)
+        view.set_bottom_margin(10)
+        view.get_buffer().set_text(text)
+        scroll.set_child(view)
+        box.append(scroll)
+
+        hint = Gtk.Label(label="Select text and press Ctrl+C to copy.", xalign=0)
+        hint.add_css_class("dim-label")
+        box.append(hint)
+
+
+def on_activate(app):
+    Window(app).present()
+
+
+app = Gtk.Application(application_id="org.omarchy.SystemReport")
+app.connect("activate", on_activate)
+sys.exit(app.run([]))
+PY
+  else
+    # No PyGObject: stdout already has the report, so nothing more is needed.
+    :
+  fi
+fi

@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+# Popup with the exact commands for whatever the check found: health repairs
+# first, `omarchy update` last when packages are pending.
+#
+#   omarchy-cleanup-popup           open the window
+#   omarchy-cleanup-popup --print   print the same text, no window
+#
+# Buttons:
+#   Copy (icon)        put the command block on the clipboard
+#   Run in terminal    open a floating terminal that shows the commands and asks
+#                      for confirmation before running anything
+#   Defer to next boot hide the bar icon until the machine restarts
+#
+# Uses a GTK4 dialog via PyGObject, which is stock on Omarchy (python-gobject is
+# in omarchy-base.packages). zenity is deliberately NOT used: it does not ship
+# with Omarchy, and it cannot distinguish a third button anyway (OK and
+# --extra-button both exit 0).
+set -uo pipefail
+
+here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)
+PATH="$here:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
+export PATH
+
+state_dir="${XDG_RUNTIME_DIR:-/tmp}/omarchy-system-check"
+mkdir -p "$state_dir"
+
+print_only=0
+write_run_script=""
+case "${1:-}" in
+  --print) print_only=1 ;;
+  --write-run-script) write_run_script="${2:-}"; [[ -n $write_run_script ]] || { echo "usage: $0 --write-run-script <path>" >&2; exit 2; } ;;
+  "") ;;
+  *) echo "usage: $0 [--print|--write-run-script <path>]" >&2; exit 2 ;;
+esac
+
+updates_rc=0
+updates=$(omarchy-update-check --report 2>&1) || updates_rc=$?
+updates_known=1
+updates_pending=0
+if (( updates_rc == 3 )); then
+  updates_known=0
+elif [[ $updates != "No pending updates." ]]; then
+  updates_pending=1
+fi
+updates_count=$(printf '%s\n' "$updates" | sed -n 's/^\([0-9][0-9]*\) package(s) pending:.*/\1/p' | head -1)
+updates_count=${updates_count:-0}
+
+health_rc=0
+health=$(omarchy-health-check --report 2>&1) || health_rc=$?
+health_skipped=0
+(( health_rc == 3 )) && health_skipped=1
+health_cmds=$(printf '%s\n' "$health" | sed -n '/^Suggested repairs/,$p' | sed '1d; s/^  //')
+
+if (( !updates_pending && updates_known && !health_skipped )) && [[ -z $health_cmds ]]; then
+  text="Nothing to fix.
+
+No pending updates and no health problems found.
+
+$(printf '%s\n' "$health")"
+  if (( print_only )); then
+    printf '%s\n' "$text"
+    exit 0
+  fi
+fi
+
+# What "Copy commands" / "Run in terminal" act on: repairs first, update last.
+cmds=""
+if [[ -n $health_cmds ]]; then
+  cmds+="$health_cmds"
+fi
+if (( updates_pending )); then
+  [[ -n $cmds ]] && cmds+=$'\n'
+  cmds+="omarchy update"
+fi
+
+sections=""
+if [[ -n $health_cmds ]]; then
+  if (( updates_pending )); then
+    sections+="Health — fix these first"$'\n'
+  else
+    sections+="Health"$'\n'
+  fi
+  sections+="$(printf '%s\n' "$health_cmds" | sed 's/^/  /')"$'\n\n'
+fi
+if (( updates_pending )); then
+  if (( updates_count > 0 )); then
+    sections+="Updates — $updates_count package(s) pending"$'\n'
+  else
+    sections+="Updates pending"$'\n'
+  fi
+  sections+="  omarchy update"$'\n\n'
+elif (( !updates_known )); then
+  sections+="Updates — could not check (network or mirror error)"$'\n\n'
+fi
+if (( health_skipped )) && [[ -z $health_cmds ]]; then
+  sections+="Health — could not check (pacman was busy)"$'\n\n'
+fi
+
+common_notes="  - Nothing here runs automatically; review before pasting.
+  - 'Copy commands' puts this whole block on the clipboard.
+  - 'Run in terminal' opens a terminal and asks once per job: repairs first,
+    then the update separately, so you can take one and leave the other.
+  - 'Defer to next boot' hides the bar icon until the machine restarts."
+
+if (( updates_pending )); then
+  notes="Notes
+  - Health and updates are separate jobs; only run the update if you want the
+    pending packages now.
+  - Order matters if you run both: health repairs first, because a stale db.lck
+    or a damaged pacman database makes 'omarchy update' fail.
+  - 'omarchy update' is last on purpose. It is the guarded full update (raw
+    'pacman -Syu' is blocked), it offers to remove orphans itself, and it ends
+    by offering a reboot - a kernel update only takes effect after that.
+  - The pacman -Rns line above is therefore optional; the update offers the same
+    orphans again.
+$common_notes"
+elif (( health_skipped )); then
+  notes="Notes
+  - The health check was skipped because pacman was busy, so this list may be
+    incomplete. Re-run the check from the bar icon in a moment.
+$common_notes"
+elif (( !updates_known )); then
+  notes="Notes
+  - Updates could not be checked (offline or a mirror error), so this list only
+    covers health. Run 'omarchy update' yourself once the network is back.
+$common_notes"
+else
+  notes="Notes
+  - These repairs are all there is; no update is pending, so 'omarchy update' is
+    not needed and is not included above.
+$common_notes"
+fi
+
+if [[ -z $sections ]]; then
+  text="Nothing to fix.
+
+$(printf '%s\n' "$health")"
+else
+  text="Commands for this machine:
+
+$sections
+$notes"
+fi
+
+if (( print_only )); then
+  printf '%s\n' "$text"
+  exit 0
+fi
+
+# Script the terminal will run. Each job is asked for separately: repairs and
+# the update are independent, and `omarchy update` ends by offering a reboot, so
+# agreeing to a repair must never silently drag the update along.
+run_script="${write_run_script:-$state_dir/run-commands.sh}"
+if [[ -n $cmds ]]; then
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'set -euo pipefail'
+    if [[ -n $health_cmds ]]; then
+      echo "cat <<'OMAC_HEALTH'"
+      printf '%s\n' "$health_cmds"
+      echo 'OMAC_HEALTH'
+      echo 'echo'
+      echo 'read -rp "Run these repairs now? [y/N] " answer || answer=""'
+      echo 'if [[ $answer =~ ^[Yy]$ ]]; then'
+      printf '%s\n' "$health_cmds"
+      echo 'else'
+      echo '  echo "Skipped the repairs."'
+      echo 'fi'
+    fi
+    if (( updates_pending )); then
+      echo 'echo'
+      echo 'echo "omarchy update"'
+      echo 'read -rp "Run omarchy update now? [y/N] " answer || answer=""'
+      echo 'if [[ $answer =~ ^[Yy]$ ]]; then'
+      echo '  omarchy update'
+      echo 'else'
+      echo '  echo "Skipped the update. Run it when you are ready: omarchy update"'
+      echo 'fi'
+    fi
+    echo 'echo'
+    echo 'read -rp "Finished. Press Enter to close." _ || true'
+    echo 'omarchy-shell -q ssearles.system-check refresh 2>/dev/null || true'
+  } >"$run_script"
+  chmod +x "$run_script"
+fi
+
+# Testing seam: emit the script the terminal would run, then stop.
+if [[ -n $write_run_script ]]; then
+  exit 0
+fi
+
+if python3 -c 'import gi; gi.require_version("Gtk", "4.0")' >/dev/null 2>&1; then
+  OMAC_TEXT="$text" OMAC_CMDS="$cmds" OMAC_STATE="$state_dir" OMAC_RUN="$run_script" \
+    python3 - <<'PY'
+import os
+import subprocess
+import sys
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, Gtk
+
+text = os.environ.get("OMAC_TEXT", "")
+cmds = os.environ.get("OMAC_CMDS", "")
+state_dir = os.environ.get("OMAC_STATE", "")
+run_script = os.environ.get("OMAC_RUN", "")
+
+
+def toast(title, body):
+    subprocess.Popen(["notify-send", "--app-name=System Check", title, body])
+
+
+class Window(Gtk.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="System check")
+        self.set_default_size(900, 640)
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(outer, f"set_margin_{side}")(18)
+        self.set_child(outer)
+
+        heading = Gtk.Label(label="Commands for this machine", xalign=0)
+        heading.add_css_class("title-3")
+        outer.append(heading)
+
+        sub = Gtk.Label(
+            label="Nothing runs until you press Run in terminal.",
+            xalign=0,
+        )
+        sub.add_css_class("dim-label")
+        outer.append(sub)
+
+        scroll = Gtk.ScrolledWindow(vexpand=True)
+        scroll.add_css_class("card")
+        view = Gtk.TextView()
+        view.set_editable(False)
+        view.set_cursor_visible(False)
+        view.set_monospace(True)
+        view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        view.set_left_margin(12)
+        view.set_right_margin(12)
+        view.set_top_margin(10)
+        view.set_bottom_margin(10)
+        view.get_buffer().set_text(text)
+        scroll.set_child(view)
+        outer.append(scroll)
+
+        actions = Gtk.Box(spacing=8)
+        actions.set_halign(Gtk.Align.END)
+
+        self.status = Gtk.Label(label="", xalign=0)
+        self.status.set_hexpand(True)
+        self.status.add_css_class("dim-label")
+        actions.append(self.status)
+
+        copy = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
+        copy.set_tooltip_text("Copy commands")
+        copy.set_sensitive(bool(cmds))
+        copy.connect("clicked", self.on_copy)
+        actions.append(copy)
+
+        defer = Gtk.Button(label="Defer to next boot")
+        defer.set_sensitive(bool(cmds))
+        defer.connect("clicked", self.on_defer)
+        actions.append(defer)
+
+        run = Gtk.Button(label="Run in terminal")
+        run.add_css_class("suggested-action")
+        run.set_sensitive(bool(cmds and run_script))
+        run.connect("clicked", self.on_run)
+        actions.append(run)
+
+        outer.append(actions)
+
+    def on_copy(self, _button):
+        Gdk.Display.get_default().get_clipboard().set(cmds)
+        self.status.set_text("Copied to clipboard")
+
+    def on_defer(self, _button):
+        open(os.path.join(state_dir, "deferred"), "w").close()
+        toast("Deferred", "Cleanup will be offered again after the next boot")
+        self.close()
+
+    def on_run(self, _button):
+        command = f"bash {run_script}"
+        try:
+            subprocess.Popen(
+                ["omarchy-launch-floating-terminal-with-presentation", command]
+            )
+        except FileNotFoundError:
+            subprocess.Popen(["xdg-terminal-exec", "bash", run_script])
+        self.close()
+
+
+def on_activate(app):
+    Window(app).present()
+
+
+app = Gtk.Application(application_id="org.omarchy.SystemCheckPopup")
+app.connect("activate", on_activate)
+sys.exit(app.run([]))
+PY
+  exit $?
+fi
+
+# Fallback: no PyGObject/GTK4 (not expected on Omarchy, where python-gobject is
+# a base package). Never depend on zenity - it is not shipped with Omarchy.
+# Show the commands in a terminal instead, which stock Omarchy always has.
+if [[ -n $cmds ]]; then
+  if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then
+    omarchy-launch-floating-terminal-with-presentation "bash $run_script" >/dev/null 2>&1 || true
+  elif command -v xdg-terminal-exec >/dev/null 2>&1; then
+    setsid xdg-terminal-exec bash "$run_script" >/dev/null 2>&1 || true
+  else
+    notify-send --app-name="System Check" "System check" \
+      "No dialog toolkit found. Commands:\n$cmds" || true
+  fi
+else
+  notify-send --app-name="System Check" "System check: all clear" \
+    "No pending updates and no health problems found." || true
+fi
+
+command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell -q ssearles.system-check refresh 2>/dev/null || true
