@@ -119,7 +119,6 @@ common_notes="  - Nothing here runs automatically; review before pasting.
   - 'Copy commands' puts this whole block on the clipboard.
   - 'Run in terminal' opens a terminal and asks once per job: repairs first,
     then the update separately, so you can take one and leave the other.
-  - At each prompt, Enter means no; type y (or yes) to run that job.
   - 'Defer to next boot' hides the bar icon until the machine restarts."
 
 if (( updates_pending )); then
