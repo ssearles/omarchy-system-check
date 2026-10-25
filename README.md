@@ -23,7 +23,11 @@ One heartbeat glyph, always in the same place; the colour carries the state.
 | red | findings — hover for the details |
 
 The tooltip shows the finding, e.g. `7 orphaned package(s) — checked 7:25 PM`, or
-the reason a check could not run.
+the reason a check could not run, plus when the last full upgrade finished:
+
+```
+System check: all clear — checked 8:34 PM · last update: today 1:41 PM
+```
 
 The colour is contrast-guarded against the bar background. A theme with a red,
 green or yellow bar would otherwise hide the matching state, so the icon keeps
@@ -94,6 +98,23 @@ omarchy-shell ssearles.system-check state     # {"known":true,"issues":true,...}
 omarchy-shell ssearles.system-check refresh   # re-run the checks now
 omarchy-shell ssearles.system-check open      # same code path as clicking
 ```
+
+### Last update vs update required
+
+The `last update:` part of the tooltip is local history: the completion time of
+the most recent `pacman -Syu` in `/var/log/pacman.log`. Other transactions are
+deliberately ignored — the orphan sweep the popup offers is `pacman -Rns`, and
+installing one package is `pacman -S`, neither of which is an update. If the log
+has no completed `-Syu`, the line is simply omitted rather than guessed.
+
+Whether an update is **required** is a separate question, and a remote one:
+`checkupdates` compares the local database against the mirrors. If it cannot
+reach them, the icon stays amber with `could not check` — it never infers "up to
+date" from the last-update date. The date is context; the mirror check is the
+verdict.
+
+`bin/omarchy-last-update` prints it on its own: ISO 8601 by default, `--human`
+for `today 1:41 PM`, `--days` for an integer.
 
 ## What it runs
 

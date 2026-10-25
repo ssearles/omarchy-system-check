@@ -51,12 +51,20 @@ health_skipped=0
 (( health_rc == 3 )) && health_skipped=1
 health_cmds=$(printf '%s\n' "$health" | sed -n '/^Suggested repairs/,$p' | sed '1d; s/^  //')
 
+# Local history, not a substitute for the mirror check above: it says when the
+# machine last ran a full upgrade, not whether one is needed now.
+last_update_human=$(omarchy-last-update --human 2>/dev/null || true)
+last_line=""
+[[ -n $last_update_human ]] && last_line="Last omarchy update: $last_update_human"
+
 if (( !updates_pending && updates_known && !health_skipped )) && [[ -z $health_cmds ]]; then
+  lead=""
+  [[ -n $last_line ]] && lead="$last_line"$'\n\n'
   text="Nothing to fix.
 
 No pending updates and no health problems found.
 
-$(printf '%s\n' "$health")"
+${lead}$(printf '%s\n' "$health")"
   if (( print_only )); then
     printf '%s\n' "$text"
     exit 0
@@ -136,9 +144,11 @@ if [[ -z $sections ]]; then
 
 $(printf '%s\n' "$health")"
 else
+  lead=""
+  [[ -n $last_line ]] && lead="$last_line"$'\n\n'
   text="Commands for this machine:
 
-$sections
+${lead}$sections
 $notes"
 fi
 

@@ -279,8 +279,57 @@ out=$(run omarchy-system-check --json) ;;
 out=$(run omarchy-system-check --json) ;;
   esac
   keys=$(jq -r 'keys | sort | join(",")' <<<"$out")
-  eq "json keys ($scenario)" "deferred,detail,health,known,summary,updates" "$keys"
+  eq "json keys ($scenario)" "deferred,detail,health,known,lastUpdate,lastUpdateHuman,summary,updates" "$keys"
 done
+
+# --------------------------------------------------------------------------
+section "omarchy-last-update"
+# --------------------------------------------------------------------------
+sandbox
+# A completed -Syu, then an orphan sweep: the sweep must not take the date.
+cat >"$SB/log/pacman.log" <<'LOG'
+[2026-10-20T09:00:00-0700] [PACMAN] Running 'pacman -Syu'
+[2026-10-20T09:00:30-0700] [ALPM] transaction completed
+[2026-10-24T19:32:00-0700] [PACMAN] Running 'pacman -Rns foo'
+[2026-10-24T19:32:11-0700] [ALPM] transaction completed
+LOG
+eq "iso -> the -Syu completion" "2026-10-20T09:00:30-0700" "$(run omarchy-last-update)"
+eq "human -> a date and a clock time" 1 "$(run omarchy-last-update --human | grep -cE '^(today|yesterday|[0-9]{1,2} [A-Z][a-z]{2}) [0-9]{1,2}:[0-9]{2} [AP]M$')"
+# Pinned to UTC so the expected clock time does not depend on the test machine.
+eq "human -> exact time (UTC)" "20 Oct 4:00 PM" "$(TZ=UTC run omarchy-last-update --human)"
+eq "days -> a number" 1 "$(run omarchy-last-update --days | grep -cE '^[0-9]+$')"
+
+# A failed -Syu (no transaction completed) must not let the next run claim it.
+cat >"$SB/log/pacman.log" <<'LOG'
+[2026-10-20T09:00:00-0700] [PACMAN] Running 'pacman -Syu'
+[2026-10-20T09:00:02-0700] [PACMAN] Running 'pacman -Rns foo'
+[2026-10-20T09:00:05-0700] [ALPM] transaction completed
+LOG
+eq "failed -Syu -> no date" "" "$(run omarchy-last-update)"
+
+# A single package install is not an update either.
+cat >"$SB/log/pacman.log" <<'LOG'
+[2026-10-20T09:00:00-0700] [PACMAN] Running 'pacman -S foo'
+[2026-10-20T09:00:05-0700] [ALPM] transaction completed
+LOG
+eq "install only -> no date" "" "$(run omarchy-last-update)"
+
+# Missing log: unknown is not an error.
+OMARCHY_PACMAN_LOG=/nonexistent/omarchy-test.log run omarchy-last-update >/dev/null; rc=$?
+eq "missing log -> exit 0" 0 "$rc"
+eq "missing log -> no output" "" "$(OMARCHY_PACMAN_LOG=/nonexistent/omarchy-test.log run omarchy-last-update)"
+
+# The JSON carries it, so the tooltip can show it.
+sandbox
+cat >"$SB/log/pacman.log" <<'LOG'
+[2026-10-20T09:00:00-0700] [PACMAN] Running 'pacman -Syu'
+[2026-10-20T09:00:30-0700] [ALPM] transaction completed
+LOG
+out=$(run omarchy-system-check --json)
+eq "json -> lastUpdate" "2026-10-20T09:00:30-0700" "$(j .lastUpdate "$out")"
+eq "json -> lastUpdateHuman carries a time" 1 "$(j .lastUpdateHuman "$out" | grep -cE '[0-9]{1,2}:[0-9]{2} [AP]M$')"
+out=$(run omarchy-system-check --report)
+has "report -> last update line" "Last update:" "$out"
 
 # --------------------------------------------------------------------------
 section "omarchy-cleanup-popup --print"
@@ -291,6 +340,14 @@ out=$(run omarchy-cleanup-popup --print)
 has "health only -> Health section" "Health" "$out"
 hasnt "health only -> no update command" "  omarchy update" "$out"
 has "health only -> says update not needed" "no update is pending" "$out"
+
+sandbox
+cat >"$SB/log/pacman.log" <<'LOG'
+[2026-10-20T09:00:00-0700] [PACMAN] Running 'pacman -Syu'
+[2026-10-20T09:00:30-0700] [ALPM] transaction completed
+LOG
+out=$(run omarchy-cleanup-popup --print)
+has "popup -> last update line" "Last omarchy update:" "$out"
 
 sandbox
 export STUB_CHECKUPDATES_RC=0 STUB_ORPHANS="a"

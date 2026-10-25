@@ -37,6 +37,11 @@ BarWidget {
   property bool healthIssue: false
   property string summary: ""
   property string detail: ""
+  // When the last full upgrade completed. Context, not a verdict: whether an
+  // update is *needed* comes from checkupdates against the mirrors, and the
+  // amber "could not check" state exists because that answer can be unknown.
+  property string lastUpdate: ""
+  property string lastUpdateHuman: ""
   // Synchronous guard: Process.running is not yet true in the same tick, so a
   // timer tick plus an IPC refresh could otherwise start two checks.
   property bool busy: false
@@ -89,6 +94,19 @@ BarWidget {
     return Qt.rgba(base.r, base.g, base.b, 0.65)
   }
 
+  // The whole tooltip in one place: the button binds to it, and the IPC
+  // `tooltip` method returns it, so the wording can be checked without a mouse.
+  readonly property string statusTooltip: (root.hasIssues
+    ? (root.detail !== "" ? root.detail : root.summary)
+      + (root.lastChecked !== "" ? " — checked " + root.lastChecked : "")
+    : (!root.known
+        ? "System check: " + (root.detail !== "" ? root.detail : "could not check")
+        : (root.deferred
+            ? "System check: deferred until next boot"
+            : "System check: all clear"
+              + (root.lastChecked !== "" ? " — checked " + root.lastChecked : ""))))
+    + (root.lastUpdateHuman !== "" ? " · last update: " + root.lastUpdateHuman : "")
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -105,6 +123,10 @@ BarWidget {
       root.openCleanup()
     }
 
+    function tooltip(): string {
+      return root.statusTooltip
+    }
+
     function state(): string {
       return JSON.stringify({
         known: root.known,
@@ -112,7 +134,9 @@ BarWidget {
         checked: root.lastChecked,
         issues: root.hasIssues,
         summary: root.summary,
-        detail: root.detail
+        detail: root.detail,
+        lastUpdate: root.lastUpdate,
+        lastUpdateHuman: root.lastUpdateHuman
       })
     }
   }
@@ -129,6 +153,9 @@ BarWidget {
         } catch (e) {
           return
         }
+
+        root.lastUpdate = parsed.lastUpdate || ""
+        root.lastUpdateHuman = parsed.lastUpdateHuman || ""
 
         // Deferred from the popup: show clean until the next boot.
         if (parsed.deferred) {
@@ -212,15 +239,7 @@ BarWidget {
     slotSize: Style.bar.statusSlot
     fontSize: Style.font.caption
     foreground: root.stateColor
-    tooltipText: root.hasIssues
-      ? (root.detail !== "" ? root.detail : root.summary)
-        + (root.lastChecked !== "" ? " — checked " + root.lastChecked : "")
-      : (!root.known
-          ? "System check: " + (root.detail !== "" ? root.detail : "could not check")
-          : (root.deferred
-              ? "System check: deferred until next boot"
-              : "System check: all clear"
-                + (root.lastChecked !== "" ? " — checked " + root.lastChecked : "")))
+    tooltipText: root.statusTooltip
     onPressed: root.openCleanup()
   }
 }

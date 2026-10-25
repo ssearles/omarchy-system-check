@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# When did the last full system upgrade finish?
+#
+# `omarchy update` runs `pacman -Syu`, so a completed -Syu transaction is the
+# marker. Other transactions must not count: the orphan sweep the popup offers
+# is `pacman -Rns`, and installing a single package is `pacman -S` - neither is
+# an update. So the timestamp is only taken from a "transaction completed" line
+# that follows an -Syu, and the pending marker is cleared once it is used.
+#
+#   omarchy-last-update            ISO 8601, e.g. 2026-10-24T13:41:06-0700
+#   omarchy-last-update --human    "today (24 Oct)"
+#   omarchy-last-update --days     0
+#
+# Prints nothing and exits 0 when the log is missing or holds no -Syu: an
+# unknown date is not an error, and callers omit the line rather than lie.
+set -uo pipefail
+
+log=${OMARCHY_PACMAN_LOG:-/var/log/pacman.log}
+
+case "${1:-}" in
+  ""|--iso) format=iso ;;
+  --human) format=human ;;
+  --days) format=days ;;
+  *) echo "usage: $0 [--iso|--human|--days]" >&2; exit 2 ;;
+esac
+
+[[ -r $log ]] || exit 0
+
+iso=$(awk '
+  # Any new pacman run clears the marker, so a failed -Syu cannot let a later
+  # unrelated transaction (an orphan sweep, a single install) claim the date.
+  /\[PACMAN\] Running/ { pending = ($0 ~ /-Syu/) ? 1 : 0; next }
+  /\[ALPM\] transaction completed/ {
+    if (pending) {
+      line = $0
+      sub(/^\[/, "", line)
+      sub(/\].*/, "", line)
+      last = line
+      pending = 0
+    }
+  }
+  END { if (last != "") print last }
+' "$log")
+
+[[ -z $iso ]] && exit 0
+
+case $format in
+  iso)
+    printf '%s\n' "$iso"
+    ;;
+  days)
+    then_s=$(date -d "$iso" +%s 2>/dev/null) || exit 0
+    days=$(( ( $(date +%s) - then_s ) / 86400 ))
+    (( days < 0 )) && days=0
+    printf '%s\n' "$days"
+    ;;
+  human)
+    then_s=$(date -d "$iso" +%s 2>/dev/null) || exit 0
+    days=$(( ( $(date +%s) - then_s ) / 86400 ))
+    (( days < 0 )) && days=0
+    # The clock time, not just the day: "today" alone does not say whether the
+    # machine was updated an hour ago or fourteen hours ago.
+    clock=$(date -d "$iso" '+%-I:%M %p' 2>/dev/null)
+    case $days in
+      0) when=today ;;
+      1) when=yesterday ;;
+      *) when=$(date -d "$iso" '+%-d %b' 2>/dev/null) ;;
+    esac
+    printf '%s %s\n' "$when" "$clock"
+    ;;
+esac

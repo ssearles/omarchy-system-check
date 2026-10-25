@@ -31,10 +31,20 @@ mkdir -p "$state_dir"
 deferred=0
 [[ -f $state_dir/deferred ]] && deferred=1
 
+# Local history only: when the last full upgrade completed. Whether one is
+# *required* is a different question, answered by checkupdates against the
+# mirrors - this timestamp must never stand in for that check.
+last_update=$(omarchy-last-update 2>/dev/null || true)
+last_update_human=""
+[[ -n $last_update ]] && last_update_human=$(omarchy-last-update --human 2>/dev/null || true)
+
 if (( deferred )); then
   case $mode in
     report) echo "Deferred until next boot." ;;
-    json) printf '{"known":true,"deferred":true,"updates":0,"health":0,"summary":"","detail":""}\n' ;;
+    json)
+      jq -cn --arg lu "$last_update" --arg luh "$last_update_human" \
+        '{known:true,deferred:true,updates:0,health:0,lastUpdate:$lu,lastUpdateHuman:$luh,summary:"",detail:""}'
+      ;;
   esac
   exit 0
 fi
@@ -103,8 +113,14 @@ fi
 
 if (( !updates_pending && health_count == 0 && !health_skipped && !updates_skipped )); then
   case $mode in
-    report) echo "All clear: no pending updates, no health issues." ;;
-    json) printf '{"known":true,"deferred":false,"updates":0,"health":0,"summary":"","detail":""}\n' ;;
+    report)
+      echo "All clear: no pending updates, no health issues."
+      [[ -n $last_update_human ]] && echo "Last update: $last_update_human"
+      ;;
+    json)
+      jq -cn --arg lu "$last_update" --arg luh "$last_update_human" \
+        '{known:true,deferred:false,updates:0,health:0,lastUpdate:$lu,lastUpdateHuman:$luh,summary:"",detail:""}'
+      ;;
   esac
   exit 0
 fi
@@ -121,6 +137,7 @@ if (( updates_pending )); then
 elif (( updates_skipped )); then
   body+="Updates"$'\n'"  check skipped: could not reach the mirrors"$'\n'
 fi
+[[ -n $last_update_human ]] && body+=$'\n'"Last update: $last_update_human"
 body+=$'\n'"Details: omarchy-report"
 
 # One-line pieces shared by the toast title, the tooltip, and --json
@@ -159,7 +176,8 @@ if [[ $mode == json ]]; then
   fi
   jq -cn --argjson known "$known" --argjson u "$updates_count" --argjson h "$health_count" \
     --arg summary "$summary" --arg detail "$detail" \
-    '{known:($known == 1), deferred:false, updates:$u, health:$h, summary:$summary, detail:$detail}'
+    --arg lu "$last_update" --arg luh "$last_update_human" \
+    '{known:($known == 1), deferred:false, updates:$u, health:$h, lastUpdate:$lu, lastUpdateHuman:$luh, summary:$summary, detail:$detail}'
   exit 0
 fi
 
