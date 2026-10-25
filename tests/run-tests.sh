@@ -437,7 +437,7 @@ export STUB_ORPHANS="a b"
 run omarchy-cleanup-popup --write-run-script "$SB/run.sh" >/dev/null
 if [[ -f $SB/run.sh ]]; then ok "run script written"; else no "run script written"; fi
 script=$(cat "$SB/run.sh" 2>/dev/null)
-has "run script -> asks for repairs" "Run these repairs now? [y/N]" "$script"
+has "run script -> asks for repairs" "Run these repairs now? [y/N] (Enter = no)" "$script"
 hasnt "health only -> no update prompt" "Run omarchy update now?" "$script"
 has "run script -> strict mode" "set -euo pipefail" "$script"
 has "run script -> has the repair" "pacman -Rns a b" "$script"
@@ -450,12 +450,34 @@ out=$(echo n | bash "$SB/run.sh" 2>&1); rc=$?
 eq "answer n -> exit 0" 0 "$rc"
 has "answer n -> says skipped" "Skipped the repairs." "$out"
 
+# Enter takes the default, which is no: nobody should have to guess what the
+# capital N in [y/N] means.
+sandbox
+export STUB_ORPHANS="a b"
+run omarchy-cleanup-popup --write-run-script "$SB/run.sh" >/dev/null
+out=$(printf '\n' | bash "$SB/run.sh" 2>&1); rc=$?
+eq "answer Enter -> exit 0" 0 "$rc"
+has "answer Enter -> says skipped" "Skipped the repairs." "$out"
+
+# A full "yes" is accepted too, not just the single letter. The sandbox has no
+# real sudo, so stub it to run the command it is given (the pacman stub).
+sandbox
+export STUB_ORPHANS="a b"
+printf '#!/usr/bin/env bash\nexec "$@"\n' >"$SB/bin/sudo"
+chmod +x "$SB/bin/sudo"
+run omarchy-cleanup-popup --write-run-script "$SB/run.sh" >/dev/null
+out=$(printf 'yes\n' | PATH="$SB/bin:$PATH" bash "$SB/run.sh" 2>&1); rc=$?
+eq "answer yes -> exit 0" 0 "$rc"
+hasnt "answer yes -> repairs not skipped" "Skipped the repairs." "$out"
+
 sandbox
 export STUB_ORPHANS="a b" STUB_CHECKUPDATES_RC=0
 run omarchy-cleanup-popup --write-run-script "$SB/run.sh" >/dev/null
 script=$(cat "$SB/run.sh")
 has "both -> asks for repairs" "Run these repairs now?" "$script"
+has "both -> repair prompt shows the default" "Run these repairs now? [y/N] (Enter = no)" "$script"
 has "both -> asks for the update separately" "Run omarchy update now?" "$script"
+has "both -> update prompt shows the default" "Run omarchy update now? [y/N] (Enter = no)" "$script"
 rline=$(grep -n "Run these repairs now?" <<<"$script" | cut -d: -f1)
 uline=$(grep -n "Run omarchy update now?" <<<"$script" | cut -d: -f1)
 if [[ -n $rline && -n $uline ]] && ((rline < uline)); then

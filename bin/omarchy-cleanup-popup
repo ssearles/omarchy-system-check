@@ -119,6 +119,7 @@ common_notes="  - Nothing here runs automatically; review before pasting.
   - 'Copy commands' puts this whole block on the clipboard.
   - 'Run in terminal' opens a terminal and asks once per job: repairs first,
     then the update separately, so you can take one and leave the other.
+  - At each prompt, Enter means no; type y (or yes) to run that job.
   - 'Defer to next boot' hides the bar icon until the machine restarts."
 
 if (( updates_pending )); then
@@ -179,8 +180,8 @@ if [[ -n $cmds ]]; then
       printf '%s\n' "$health_cmds"
       echo 'OMAC_HEALTH'
       echo 'echo'
-      echo 'read -rp "Run these repairs now? [y/N] " answer || answer=""'
-      echo 'if [[ $answer =~ ^[Yy]$ ]]; then'
+      echo 'read -rp "Run these repairs now? [y/N] (Enter = no) " answer || answer=""'
+      echo 'if [[ $answer =~ ^[Yy]([Ee][Ss])?$ ]]; then'
       printf '%s\n' "$health_cmds"
       echo 'else'
       echo '  echo "Skipped the repairs."'
@@ -189,8 +190,8 @@ if [[ -n $cmds ]]; then
     if (( updates_pending )); then
       echo 'echo'
       echo 'echo "omarchy update"'
-      echo 'read -rp "Run omarchy update now? [y/N] " answer || answer=""'
-      echo 'if [[ $answer =~ ^[Yy]$ ]]; then'
+      echo 'read -rp "Run omarchy update now? [y/N] (Enter = no) " answer || answer=""'
+      echo 'if [[ $answer =~ ^[Yy]([Ee][Ss])?$ ]]; then'
       echo '  omarchy update'
       echo 'else'
       echo '  echo "Skipped the update. Run it when you are ready: omarchy update"'
