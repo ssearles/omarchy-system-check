@@ -66,6 +66,53 @@ omarchy bar move ssearles.system-check --section right
 
 The widget is added to the right section by default.
 
+### Installing on another machine (agent instructions)
+
+Everything below runs as your user. There is no `sudo` step and no service,
+timer or file outside the plugin directory; the checks are read-only.
+
+```bash
+# 1. install and enable
+omarchy plugin add https://github.com/ssearles/omarchy-system-check.git --enable
+
+# 2. reload the shell - required, and not optional
+omarchy restart shell
+
+# 3. wait for the first poll, then read the verdict without a mouse
+sleep 20
+omarchy-shell ssearles.system-check state
+omarchy-shell ssearles.system-check tooltip
+```
+
+A healthy machine prints something like:
+
+```
+{"known":true,"deferred":false,"checked":"8:46 PM","issues":false,"summary":"",
+ "detail":"","lastUpdate":"2026-10-24T13:41:06-0700",
+ "lastUpdateHuman":"today 1:41 PM","omarchy":"up to date"}
+
+System check: all clear — checked 8:46 PM · last update: today 1:41 PM · Omarchy up to date
+```
+
+`omarchy restart shell` is the step that catches people out: the plugin is
+instantiated once, and neither `rescanPlugins` nor the "Local plugin changed,
+reloading" log line re-reads a widget that already exists. Without the restart
+the IPC target does not exist and the bar shows nothing.
+
+`"known":false` right after install is normal for the first ~20 seconds — the
+first poll runs at shell start and may still be waiting on the mirrors. If it
+is still false after a minute, run `omarchy-shell ssearles.system-check refresh`
+and read the `detail` field for the reason.
+
+To confirm it is wired into the bar at all:
+
+```bash
+omarchy bar list | grep system-check     # present
+omarchy-shell ssearles.system-check open # opens the same popup a click does
+```
+
+Removal is one command (see [Removal](#removal)).
+
 ## Use
 
 Click the icon. The popup lists the commands to paste into a terminal:
@@ -201,6 +248,56 @@ omarchy plugin remove ssearles.system-check
 
 Nothing else is left behind: no services, no timers, no files outside the plugin
 directory (the defer flag lives in `$XDG_RUNTIME_DIR`).
+
+## Marketplace listing (not yet submitted)
+
+This plugin is deliberately **unlisted**. When it is submitted, everything the
+marketplace asks for is already in this repository:
+
+| Requirement | Here |
+|---|---|
+| Public repo, one plugin, `manifest.json` at the root | yes |
+| README with install *and* removal instructions | `## Install`, `## Removal` |
+| Root license, dependencies documented | `LICENSE`, `## Requirements` |
+| Plugin ID outside the reserved `omarchy.*` namespace | `ssearles.system-check` |
+| Optional root `preview.png` | not present |
+
+Submission goes through the issue form:
+
+<https://github.com/omacom/omarchy-plugin-marketplace/issues/new?template=submit-plugin.yml>
+
+or, for an agent, a `submission`-labelled issue whose body follows
+[SUBMISSION.md](https://github.com/omacom/omarchy-plugin-marketplace/blob/main/SUBMISSION.md):
+
+```
+### Repository URL
+https://github.com/ssearles/omarchy-system-check
+
+### Category
+System
+
+### Tags
+bar, quickshell, system
+
+### Submission checklist
+- [x] The repository is public and contains installation and removal instructions.
+- [x] I have documented the plugin license and any external dependencies.
+- [x] I confirm that I own or have permission to submit this plugin and its preview assets.
+- [x] The plugin does not overwrite user configuration without explicit consent.
+- [x] I understand that approval is for listing and is not a security review.
+```
+
+Category is case-sensitive (`System`); one to three tags from the marketplace's
+fixed list. A listing requires a fresh scan of an **exact commit**, so tag or
+record the SHA being submitted rather than pointing at a moving `main`:
+
+```bash
+git rev-parse HEAD
+```
+
+The marketplace's automated baseline is structural and compatibility checking,
+not a security review — which is also why this plugin only ever prints repair
+commands and asks before running them.
 
 ## License
 
