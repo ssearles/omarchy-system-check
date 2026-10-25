@@ -314,6 +314,15 @@ cat >"$SB/log/pacman.log" <<'LOG'
 LOG
 eq "install only -> no date" "" "$(run omarchy-last-update)"
 
+# A junk timestamp must not resolve to "now": date -d "" does exactly that,
+# which would turn "unknown" into "updated a moment ago".
+cat >"$SB/log/pacman.log" <<'LOG'
+[garbage] [PACMAN] Running 'pacman -Syu'
+[garbage] [ALPM] transaction completed
+LOG
+eq "malformed timestamp -> no iso" "" "$(run omarchy-last-update)"
+eq "malformed timestamp -> no human" "" "$(run omarchy-last-update --human)"
+
 # Missing log: unknown is not an error.
 OMARCHY_PACMAN_LOG=/nonexistent/omarchy-test.log run omarchy-last-update >/dev/null; rc=$?
 eq "missing log -> exit 0" 0 "$rc"

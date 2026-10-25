@@ -44,6 +44,10 @@ iso=$(awk '
 
 [[ -z $iso ]] && exit 0
 
+# Validate before formatting: `date -d ""` (and other junk) resolves to *now*,
+# which would quietly turn "unknown" into "updated a moment ago".
+[[ $iso =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+-][0-9]{4}$ ]] || exit 0
+
 case $format in
   iso)
     printf '%s\n' "$iso"
