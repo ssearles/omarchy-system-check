@@ -56,10 +56,19 @@ health_cmds=$(printf '%s\n' "$health" | sed -n '/^Suggested repairs/,$p' | sed '
 last_update_human=$(omarchy-last-update --human 2>/dev/null || true)
 last_line=""
 [[ -n $last_update_human ]] && last_line="Last omarchy update: $last_update_human"
+# What the mirrors say about Omarchy itself, which is not the same thing as the
+# local history above.
+omarchy_line=""
+case "$(omarchy-update-check --omarchy 2>/dev/null || true)" in
+  "up to date") omarchy_line="Omarchy: up to date" ;;
+esac
+
+lead=""
+[[ -n $last_line ]] && lead+="$last_line"$'\n'
+[[ -n $omarchy_line ]] && lead+="$omarchy_line"$'\n'
+[[ -n $lead ]] && lead+=$'\n'
 
 if (( !updates_pending && updates_known && !health_skipped )) && [[ -z $health_cmds ]]; then
-  lead=""
-  [[ -n $last_line ]] && lead="$last_line"$'\n\n'
   text="Nothing to fix.
 
 No pending updates and no health problems found.
@@ -144,8 +153,6 @@ if [[ -z $sections ]]; then
 
 $(printf '%s\n' "$health")"
 else
-  lead=""
-  [[ -n $last_line ]] && lead="$last_line"$'\n\n'
   text="Commands for this machine:
 
 ${lead}$sections

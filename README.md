@@ -26,8 +26,12 @@ The tooltip shows the finding, e.g. `7 orphaned package(s) — checked 7:25 PM`,
 the reason a check could not run, plus when the last full upgrade finished:
 
 ```
-System check: all clear — checked 8:34 PM · last update: today 1:41 PM
+System check: all clear — checked 8:34 PM · last update: today 1:41 PM · Omarchy up to date
 ```
+
+Three separate facts, deliberately not merged: when the check last ran, when
+this machine last upgraded, and what the mirrors currently say about Omarchy
+itself.
 
 The colour is contrast-guarded against the bar background. A theme with a red,
 green or yellow bar would otherwise hide the matching state, so the icon keeps
@@ -116,6 +120,30 @@ verdict.
 `bin/omarchy-last-update` prints it on its own: ISO 8601 by default, `--human`
 for `today 1:41 PM`, `--days` for an integer.
 
+### The Omarchy verdict
+
+The `Omarchy` part of the tooltip answers the narrower question: **does
+upstream have a new Omarchy release for this machine?** That is the same check
+the first-party `omarchy.system-update` bar widget runs at login, via
+`omarchy-update-available` — it looks for the `omarchy` package in
+`checkupdates` output. `bin/omarchy-update-check --omarchy` exposes it:
+
+```
+$ omarchy-update-check --omarchy
+up to date              # checked against the mirrors, nothing new
+omarchy 4.1.0-1 -> 4.2.0-1   # an update is available
+                        # (empty) could not check
+```
+
+It is a remote answer, so it is not derived from the local timestamp: a machine
+that upgraded an hour ago can still have an Omarchy update waiting, and the
+laptop that surprised you with an update prompt after a reboot is exactly that
+case. When the check cannot run, the field is empty and the tooltip omits it
+rather than claiming "up to date".
+
+The JSON carries it as `omarchy` (`"up to date"`, `"update available"`, or
+`""`), on every path including `deferred`.
+
 ## What it runs
 
 Read-only commands, all as your user:
@@ -123,6 +151,7 @@ Read-only commands, all as your user:
 | Command | Purpose |
 |---|---|
 | `checkupdates` | pending package updates (temporary DB, never touches `/var/lib/pacman`) |
+| `omarchy-update-available` | whether the mirrors have a new Omarchy release |
 | `pacman -Qtdq` | orphaned packages |
 | `pacman -Dk`, `pacman -Qkk` | pacman DB consistency |
 | `pacman -Qm`, `pacman -Qn` | foreign/foreigner checks |

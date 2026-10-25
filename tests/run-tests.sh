@@ -68,8 +68,17 @@ SH
 
   # No network: getent succeeds immediately so update-check does not wait 30 s.
   printf '#!/usr/bin/env bash\nexit 0\n' >"$SB/bin/getent"
-  # No Omarchy chatter: no omarchy-package update, no bar refresh.
-  printf '#!/usr/bin/env bash\nexit 1\n' >"$SB/bin/omarchy-update-available"
+  # Omarchy's own upstream verdict. Default: checked and current (the real
+  # omarchy-update-available exits 1 with this wording). STUB_OMARCHY_UPDATE=1
+  # means an update is available; STUB_OMARCHY_UNKNOWN=1 means the check could
+  # not run at all.
+  cat >"$SB/bin/omarchy-update-available" <<'SH'
+#!/usr/bin/env bash
+[[ ${STUB_OMARCHY_UNKNOWN:-0} == 1 ]] && exit 2
+[[ ${STUB_OMARCHY_UPDATE:-0} == 1 ]] && { echo "omarchy 4.1.0-1 -> 4.2.0-1"; exit 0; }
+echo "Omarchy is up to date"
+exit 1
+SH
   printf '#!/usr/bin/env bash\nexit 0\n' >"$SB/bin/omarchy-update-status"
   chmod +x "$SB/bin"/*
 
@@ -81,6 +90,7 @@ SH
   export OMARCHY_UPDATE_LOG="$SB/log/update.log"
   export OMARCHY_CHECK_RETRY_DELAY=0
   unset STUB_ORPHANS STUB_DK_FAIL STUB_FAILED_UNITS STUB_BUSY STUB_CHECKUPDATES_RC
+  unset STUB_OMARCHY_UPDATE STUB_OMARCHY_UNKNOWN
 }
 
 cleanup() { [[ -n ${SB:-} && -d ${SB:-} ]] && rm -rf "$SB"; }
@@ -116,6 +126,24 @@ export STUB_CHECKUPDATES_RC=1
 err=$(run omarchy-update-check --report); rc=$?
 eq "checkupdates error -> exit 3" 3 "$rc"
 has "checkupdates error -> explains skip" "SKIP" "$err"
+
+# --------------------------------------------------------------------------
+section "omarchy-update-check --omarchy"
+# --------------------------------------------------------------------------
+# The mirrors' verdict on Omarchy itself. This is a different question from the
+# local last-update time, so it gets its own mode and its own tests.
+sandbox
+eq "--omarchy up to date" "up to date" "$(run omarchy-update-check --omarchy)"
+
+sandbox
+export STUB_OMARCHY_UPDATE=1
+eq "--omarchy update available" "omarchy 4.1.0-1 -> 4.2.0-1" "$(run omarchy-update-check --omarchy)"
+
+# Could not check: an empty answer, never a guess of "up to date".
+sandbox
+export STUB_OMARCHY_UNKNOWN=1
+eq "--omarchy unknown -> empty" "" "$(run omarchy-update-check --omarchy)"
+eq "--omarchy always exits 0" 0 "$(rc_of omarchy-update-check --omarchy)"
 
 # --------------------------------------------------------------------------
 section "omarchy-health-check"
@@ -279,7 +307,7 @@ out=$(run omarchy-system-check --json) ;;
 out=$(run omarchy-system-check --json) ;;
   esac
   keys=$(jq -r 'keys | sort | join(",")' <<<"$out")
-  eq "json keys ($scenario)" "deferred,detail,health,known,lastUpdate,lastUpdateHuman,summary,updates" "$keys"
+  eq "json keys ($scenario)" "deferred,detail,health,known,lastUpdate,lastUpdateHuman,omarchy,summary,updates" "$keys"
 done
 
 # --------------------------------------------------------------------------
@@ -340,6 +368,30 @@ eq "json -> lastUpdateHuman carries a time" 1 "$(j .lastUpdateHuman "$out" | gre
 out=$(run omarchy-system-check --report)
 has "report -> last update line" "Last update:" "$out"
 
+# The mirrors' verdict on Omarchy itself is in the same payload, but is a
+# separate field: it must not be inferred from the local timestamp.
+sandbox
+out=$(run omarchy-system-check --json)
+eq "json -> omarchy up to date" "up to date" "$(j .omarchy "$out")"
+
+sandbox
+export STUB_OMARCHY_UPDATE=1
+out=$(run omarchy-system-check --json)
+eq "json -> omarchy update available" "update available" "$(j .omarchy "$out")"
+
+sandbox
+export STUB_OMARCHY_UNKNOWN=1
+out=$(run omarchy-system-check --json)
+eq "json -> omarchy unknown -> empty" "" "$(j .omarchy "$out")"
+
+# Deferred must still carry it: the icon is quiet, not blind.
+sandbox
+export STUB_OMARCHY_UPDATE=1
+mkdir -p "$XDG_RUNTIME_DIR/omarchy-system-check"
+: >"$XDG_RUNTIME_DIR/omarchy-system-check/deferred"
+out=$(run omarchy-system-check --json)
+eq "deferred -> omarchy still reported" "update available" "$(j .omarchy "$out")"
+
 # --------------------------------------------------------------------------
 section "omarchy-cleanup-popup --print"
 # --------------------------------------------------------------------------
@@ -357,6 +409,7 @@ cat >"$SB/log/pacman.log" <<'LOG'
 LOG
 out=$(run omarchy-cleanup-popup --print)
 has "popup -> last update line" "Last omarchy update:" "$out"
+has "popup -> omarchy verdict" "Omarchy: up to date" "$out"
 
 sandbox
 export STUB_CHECKUPDATES_RC=0 STUB_ORPHANS="a"

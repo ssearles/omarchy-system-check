@@ -42,6 +42,10 @@ BarWidget {
   // amber "could not check" state exists because that answer can be unknown.
   property string lastUpdate: ""
   property string lastUpdateHuman: ""
+  // What the mirrors say about Omarchy itself: "up to date", "update
+  // available", or "" when the upstream check could not run. Separate from
+  // lastUpdate, which is only this machine's local history.
+  property string omarchy: ""
   // Synchronous guard: Process.running is not yet true in the same tick, so a
   // timer tick plus an IPC refresh could otherwise start two checks.
   property bool busy: false
@@ -106,6 +110,7 @@ BarWidget {
             : "System check: all clear"
               + (root.lastChecked !== "" ? " — checked " + root.lastChecked : ""))))
     + (root.lastUpdateHuman !== "" ? " · last update: " + root.lastUpdateHuman : "")
+    + (root.omarchy !== "" ? " · Omarchy " + root.omarchy : "")
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -136,7 +141,8 @@ BarWidget {
         summary: root.summary,
         detail: root.detail,
         lastUpdate: root.lastUpdate,
-        lastUpdateHuman: root.lastUpdateHuman
+        lastUpdateHuman: root.lastUpdateHuman,
+        omarchy: root.omarchy
       })
     }
   }
@@ -156,6 +162,7 @@ BarWidget {
 
         root.lastUpdate = parsed.lastUpdate || ""
         root.lastUpdateHuman = parsed.lastUpdateHuman || ""
+        root.omarchy = parsed.omarchy || ""
 
         // Deferred from the popup: show clean until the next boot.
         if (parsed.deferred) {

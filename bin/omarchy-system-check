@@ -34,6 +34,16 @@ deferred=0
 # Local history only: when the last full upgrade completed. Whether one is
 # *required* is a different question, answered by checkupdates against the
 # mirrors - this timestamp must never stand in for that check.
+# What the mirrors say about Omarchy itself, which is a different question from
+# the package list and from the local last-update time. This is the same check
+# the boot-time omarchy-update-status uses for its own bar widget.
+omarchy_state=""
+case "$(omarchy-update-check --omarchy 2>/dev/null || true)" in
+  "") ;;
+  "up to date") omarchy_state="up to date" ;;
+  *) omarchy_state="update available" ;;
+esac
+
 last_update=$(omarchy-last-update 2>/dev/null || true)
 last_update_human=""
 [[ -n $last_update ]] && last_update_human=$(omarchy-last-update --human 2>/dev/null || true)
@@ -42,8 +52,8 @@ if (( deferred )); then
   case $mode in
     report) echo "Deferred until next boot." ;;
     json)
-      jq -cn --arg lu "$last_update" --arg luh "$last_update_human" \
-        '{known:true,deferred:true,updates:0,health:0,lastUpdate:$lu,lastUpdateHuman:$luh,summary:"",detail:""}'
+      jq -cn --arg lu "$last_update" --arg luh "$last_update_human" --arg om "$omarchy_state" \
+        '{known:true,deferred:true,updates:0,health:0,lastUpdate:$lu,lastUpdateHuman:$luh,omarchy:$om,summary:"",detail:""}'
       ;;
   esac
   exit 0
@@ -118,8 +128,8 @@ if (( !updates_pending && health_count == 0 && !health_skipped && !updates_skipp
       [[ -n $last_update_human ]] && echo "Last update: $last_update_human"
       ;;
     json)
-      jq -cn --arg lu "$last_update" --arg luh "$last_update_human" \
-        '{known:true,deferred:false,updates:0,health:0,lastUpdate:$lu,lastUpdateHuman:$luh,summary:"",detail:""}'
+      jq -cn --arg lu "$last_update" --arg luh "$last_update_human" --arg om "$omarchy_state" \
+        '{known:true,deferred:false,updates:0,health:0,lastUpdate:$lu,lastUpdateHuman:$luh,omarchy:$om,summary:"",detail:""}'
       ;;
   esac
   exit 0
@@ -176,8 +186,8 @@ if [[ $mode == json ]]; then
   fi
   jq -cn --argjson known "$known" --argjson u "$updates_count" --argjson h "$health_count" \
     --arg summary "$summary" --arg detail "$detail" \
-    --arg lu "$last_update" --arg luh "$last_update_human" \
-    '{known:($known == 1), deferred:false, updates:$u, health:$h, lastUpdate:$lu, lastUpdateHuman:$luh, summary:$summary, detail:$detail}'
+    --arg lu "$last_update" --arg luh "$last_update_human" --arg om "$omarchy_state" \
+    '{known:($known == 1), deferred:false, updates:$u, health:$h, lastUpdate:$lu, lastUpdateHuman:$luh, omarchy:$om, summary:$summary, detail:$detail}'
   exit 0
 fi
 
