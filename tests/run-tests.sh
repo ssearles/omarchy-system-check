@@ -440,6 +440,7 @@ script=$(cat "$SB/run.sh" 2>/dev/null)
 has "run script -> asks for repairs" "Run these repairs now? [y/N] (Enter = no)" "$script"
 hasnt "health only -> no update prompt" "Run omarchy update now?" "$script"
 has "run script -> strict mode" "set -euo pipefail" "$script"
+has "run script -> explains the Enter default" "At each prompt, Enter means no" "$script"
 has "run script -> has the repair" "pacman -Rns a b" "$script"
 if [[ -x $SB/run.sh ]]; then ok "run script executable"; else no "run script executable"; fi
 
@@ -449,6 +450,7 @@ run omarchy-cleanup-popup --write-run-script "$SB/run.sh" >/dev/null
 out=$(echo n | bash "$SB/run.sh" 2>&1); rc=$?
 eq "answer n -> exit 0" 0 "$rc"
 has "answer n -> says skipped" "Skipped the repairs." "$out"
+has "answer n -> printed the Enter hint" "At each prompt, Enter means no" "$out"
 
 # Enter takes the default, which is no: nobody should have to guess what the
 # capital N in [y/N] means.
