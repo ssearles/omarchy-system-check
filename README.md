@@ -205,10 +205,17 @@ Read-only commands, all as your user:
 | `checkupdates` | pending package updates (temporary DB, never touches `/var/lib/pacman`) |
 | `omarchy-update-available` | whether the mirrors have a new Omarchy release |
 | `pacman -Qtdq` | orphaned packages |
-| `pacman -Dk`, `pacman -Qkk` | pacman DB consistency |
-| `pacman -Qm`, `pacman -Qn` | foreign/foreigner checks |
+| `pacman -Dk` | dependency sanity (broken or missing dependency links) |
 | `systemctl --failed` | failed units |
-| `journalctl`, `/tmp/omarchy-update.log` | interrupted update / initramfs failures |
+| `find /etc -name '*.pacnew'` | unmerged config files from an update |
+| `tail`/`grep` on `/var/log/pacman.log` | aborted transactions (started vs completed) |
+| `/var/lib/pacman/local/*/desc` | local DB entries cut short by an interrupted write |
+| `/tmp/omarchy-update.log` | initramfs or hook failure from the last update |
+
+`pacman -Qkk` (verify every installed file against its mtree) is deliberately
+not part of the check: it is slow, it is noisy on a healthy Arch install, and it
+answers "are these files intact" rather than "did an update stop halfway". Run
+it by hand if you want that answer.
 
 Suggested repairs are printed, never executed. Judgement calls carry a
 `# review:` note next to the command — the orphan sweep, for instance, says to
